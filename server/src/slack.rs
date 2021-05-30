@@ -88,6 +88,22 @@ struct SlackUserInfoParams {
     pub user: String,
 }
 
+pub async fn respond(response_url: &str, message: &str) -> crate::Result<serde_json::Value> {
+    let mut resp = surf::post(response_url)
+        .header("Content-type", "application/json; charset=utf-8")
+        .body(surf::Body::from_json(&serde_json::json!({
+            "response_type": "ephemeral",
+            "text": message,
+        }))?)
+        .send()
+        .await
+        .map_err(|e| se!("slack response failed: {}", e))?;
+    Ok(resp
+        .body_form()
+        .await
+        .map_err(|e| se!("slack response form parse error {}", e))?)
+}
+
 pub async fn get_user_name_email(
     user_token: &str,
     user_slack_id: &str,

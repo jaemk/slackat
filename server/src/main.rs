@@ -75,6 +75,11 @@ macro_rules! resp {
             .body(serde_json::to_string(&$obj)?)
             .build()
     }};
+    (status => $status:expr) => {{
+        tide::Response::builder($status)
+            .content_type("text/plain")
+            .build()
+    }};
     (status => $status:expr, message => $msg:expr) => {{
         tide::Response::builder($status)
             .content_type("text/plain")

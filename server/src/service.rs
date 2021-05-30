@@ -52,13 +52,40 @@ pub async fn start(pool: sqlx::PgPool) -> crate::Result<()> {
     Ok(())
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct SlackCommand {
+    pub team_id: String,
+    pub team_domain: String,
+    pub channel_id: String,
+    pub user_id: String,
+    pub user_name: String,
+    pub command: String,
+    pub text: String,
+    pub api_app_id: String,
+    pub is_enterprise_install: bool,
+    pub response_url: String,
+    pub trigger_id: String,
+}
+
+async fn handle_command(ctx: Context, cmd: SlackCommand) {
+    slack::respond(&cmd.response_url, &format!("Got: {}", cmd.text))
+        .await
+        .expect("error responding to slack command");
+}
+
 async fn slack_command(mut req: tide::Request<Context>) -> tide::Result {
-    let body: serde_json::Value = req
+    let ctx = req.state().clone();
+    let body: SlackCommand = req
         .body_form()
         .await
         .map_err(|e| se!("error decoding json request {:?}", e))?;
-    slog::info!(LOG, "request body: {:?}", body);
-    return Ok(resp!(status => 200, message => "ok"));
+    slog::info!(
+        LOG,
+        "request body: {}",
+        serde_json::to_string_pretty(&body)?
+    );
+    async_std::task::spawn(handle_command(ctx, body));
+    return Ok(resp!(status => 200));
 }
 
 async fn index(req: tide::Request<Context>) -> tide::Result {
