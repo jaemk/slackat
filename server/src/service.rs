@@ -1,7 +1,9 @@
 use cached::Cached;
-use chrono::{Duration, Utc};
+use chrono::{Duration, TimeZone, Utc};
+use regex::Regex;
 use sqlx::PgPool;
 
+use crate::slack::get_user_access_token;
 use crate::{crypto, models, resp, se, slack, Result, CONFIG, LOG};
 
 macro_rules! user_or_redirect {
@@ -20,6 +22,7 @@ macro_rules! user_or_redirect {
     }};
 }
 
+#[allow(unused_macros)]
 macro_rules! params_or_error {
     ($req:expr, $param_type:ty) => {{
         match $req.query::<$param_type>() {
@@ -67,10 +70,150 @@ struct SlackCommand {
     pub trigger_id: String,
 }
 
+struct ScheduleArgs {
+    text: String,
+    post_at: chrono::DateTime<chrono::Utc>,
+}
+enum ParsedCommand {
+    Schedule(ScheduleArgs),
+    List,
+    Cancel(String),
+    Help,
+    Error(String),
+}
+
+fn _is_help(s: &str) -> bool {
+    lazy_static::lazy_static! {
+        static ref HELP_RE: Regex = Regex::new("^(h|-h|help|--help)$").unwrap();
+    }
+    HELP_RE.is_match(s)
+}
+
+fn _is_list(s: &str) -> bool {
+    lazy_static::lazy_static! {
+        static ref LIST_RE: Regex = Regex::new("^(l|-l|list|--list)$").unwrap();
+    }
+    LIST_RE.is_match(s)
+}
+
+fn _find_cancel(s: &str) -> Option<&str> {
+    lazy_static::lazy_static! {
+        static ref CANCEL_RE: Regex = Regex::new(r"(?i)cancel\s?(.*)\s?").unwrap();
+    }
+    CANCEL_RE
+        .captures(s)
+        .and_then(|caps| caps.get(1))
+        .map(|cap_match| cap_match.as_str())
+}
+
+fn _parse_command(cmd: &SlackCommand) -> Result<ParsedCommand> {
+    let s = cmd.text.trim();
+    if _is_help(s) {
+        return Ok(ParsedCommand::Help);
+    }
+    if _is_list(s) {
+        return Ok(ParsedCommand::List);
+    }
+    if let Some(cancel_message_id) = _find_cancel(s) {
+        return Ok(ParsedCommand::Cancel(cancel_message_id.to_string()));
+    }
+
+    if let Some((time, message)) = s.split_once("send") {
+        let post_at = match time.split_once("in") {
+            Some((_, time)) => {
+                let dur = humantime::parse_duration(time.trim())
+                    .map_err(|e| se!("error parsing duration: {:?}", e))?;
+                chrono::Utc::now()
+                    .checked_add_signed(
+                        chrono::Duration::from_std(dur)
+                            .map_err(|e| se!("invalid duration {:?}", e))?,
+                    )
+                    .ok_or_else(|| se!("error adding duration"))?
+            }
+            None => {
+                let dur_from_epoch = humantime::parse_rfc3339_weak(time.trim())
+                    .map_err(|e| se!("error parsing datetime: {}, {}", time, e))?
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)?;
+                chrono::Utc.from_utc_datetime(&chrono::NaiveDateTime::from_timestamp(
+                    dur_from_epoch.as_secs() as i64,
+                    dur_from_epoch.subsec_nanos(),
+                ))
+            }
+        };
+        return Ok(ParsedCommand::Schedule(ScheduleArgs {
+            text: message.trim().to_string(),
+            post_at,
+        }));
+    }
+
+    Ok(ParsedCommand::Error(format!(
+        "Sorry, couldn't understand what you meant: \"{}\"",
+        s
+    )))
+}
+
+async fn _handle_command(ctx: &Context, cmd: &SlackCommand) -> Result<()> {
+    let access_token = get_user_access_token(&ctx.pool, &cmd.user_id, &cmd.team_id).await?;
+    let parsed = _parse_command(cmd)?;
+
+    let response = match parsed {
+        ParsedCommand::Help => Some(String::from("Ex. /at in 20 minutes send Time's up!")),
+        ParsedCommand::List => {
+            let listed = slack::list_messages(&access_token, &cmd.channel_id, None, None).await?;
+            Some(listed.format_messages())
+        }
+        ParsedCommand::Schedule(ScheduleArgs { text, post_at }) => {
+            slack::schedule_message(&access_token, &cmd.channel_id, &text, post_at).await?;
+            Some(format!(
+                "Scheduled \"{}\" to be sent at {}",
+                text,
+                post_at.to_string()
+            ))
+        }
+        ParsedCommand::Cancel(message_id) => {
+            slog::info!(LOG, "got cancel: {}", message_id);
+            Some("cancel!".to_string())
+        }
+        ParsedCommand::Error(err) => {
+            slog::error!(
+                LOG,
+                "error parsing command {} for user {} {}: {:?}",
+                cmd.text,
+                cmd.user_id,
+                cmd.user_name,
+                err
+            );
+            Some(err)
+        }
+    };
+    if let Some(response) = response {
+        slack::respond(&cmd.response_url, &response)
+            .await
+            .map_err(|e| se!("error sending slack response {:?}", e))?;
+    }
+    Ok(())
+}
 async fn handle_command(ctx: Context, cmd: SlackCommand) {
-    slack::respond(&cmd.response_url, &format!("Got: {}", cmd.text))
-        .await
-        .expect("error responding to slack command");
+    let start = std::time::Instant::now();
+    match _handle_command(&ctx, &cmd).await {
+        Err(e) => slog::error!(
+            LOG,
+            "error handling command \"{}\" for user {} {} [{}ms]: {:?}",
+            cmd.text,
+            cmd.user_id,
+            cmd.user_name,
+            start.elapsed().as_millis(),
+            e
+        ),
+        Ok(_) => slog::info!(
+            LOG,
+            "handled command \"{}\" for user {} {} [{}ms]",
+            cmd.text,
+            cmd.user_id,
+            cmd.user_name,
+            start.elapsed().as_millis(),
+        ),
+    }
 }
 
 async fn slack_command(mut req: tide::Request<Context>) -> tide::Result {
@@ -79,11 +222,6 @@ async fn slack_command(mut req: tide::Request<Context>) -> tide::Result {
         .body_form()
         .await
         .map_err(|e| se!("error decoding json request {:?}", e))?;
-    slog::info!(
-        LOG,
-        "request body: {}",
-        serde_json::to_string_pretty(&body)?
-    );
     async_std::task::spawn(handle_command(ctx, body));
     return Ok(resp!(status => 200));
 }
@@ -158,15 +296,16 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
     let login_token: OneTimeLoginToken =
         serde_json::from_str(&token_str).map_err(|e| se!("deserialize token error {}", e))?;
 
-    let slack_access = slack::new_slack_access_token(&auth_callback.code)
+    let slack_access = slack::exchange_access_token(&auth_callback.code)
         .await
         .map_err(|e| se!("slack access error {}", e))?;
+
+    // TODO: get user-name, email, and user timezone
     // let name_email = slack::get_new_user_name_email(&slack_access)
     //     .await
     //     .map_err(|e| se!("error getting name {}", e))?;
 
-    let new_auth_token = get_new_auth_token().map_err(|e| se!("new auth tokens error {}", e))?;
-
+    let new_auth_token = make_new_auth_token().map_err(|e| se!("new auth tokens error {}", e))?;
     let user = upsert_user_and_slack_tokens(&ctx.pool, &slack_access, &new_auth_token)
         .await
         .map_err(|e| se!("user upsert error {}", e))?;
@@ -181,13 +320,12 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
     );
 
     if let Some(redirect) = login_token.redirect {
-        // the one time login token that we sent to spotify when
-        // redirecting the user to spotify's auth might have had
-        // a redirect url that we sent which was the url that the
-        // user was originally trying to go to when we noticed
-        // that they weren't logged in. If the url they were
-        // trying to go to wasn't the login url, then redirect
-        // them to it, otherwise just return the user info.
+        // the one time login token that we sent to slack when
+        // redirecting to slacks's auth might have had a redirect
+        // url that was the url that the user was originally trying
+        // to go to when we noticed that they weren't logged in.
+        // If the url they were trying to go to wasn't the login url,
+        // then redirect them to it, otherwise just return the user info.
         if !redirect.contains("login") {
             slog::info!(LOG, "found login redirect {:?}", redirect);
             let mut resp: tide::Response =
@@ -240,7 +378,7 @@ struct MaybeRedirect {
     redirect: Option<String>,
 }
 
-fn get_new_auth_token() -> Result<String> {
+fn make_new_auth_token() -> Result<String> {
     let s = uuid::Uuid::new_v4()
         .to_simple()
         .encode_lower(&mut uuid::Uuid::encode_buffer())

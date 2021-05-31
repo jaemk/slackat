@@ -1,6 +1,8 @@
 use sqlx::PgPool;
 
 use crate::{crypto, models, se, CONFIG};
+use chrono::TimeZone;
+use std::collections::HashMap;
 use std::ops::Index;
 
 #[derive(serde::Deserialize, Debug)]
@@ -44,7 +46,7 @@ impl SlackAccessParams {
     }
 }
 
-pub async fn new_slack_access_token(code: &str) -> crate::Result<SlackAccess> {
+pub async fn exchange_access_token(code: &str) -> crate::Result<SlackAccess> {
     let mut resp = surf::post("https://slack.com/api/oauth.v2.access")
         .body(
             surf::Body::from_form(&SlackAccessParams::from_code(code))
@@ -71,6 +73,22 @@ pub async fn new_slack_access_token(code: &str) -> crate::Result<SlackAccess> {
     }
 }
 
+pub async fn respond(response_url: &str, message: &str) -> crate::Result<serde_json::Value> {
+    let mut resp = surf::post(response_url)
+        .header("Content-type", "application/json; charset=utf-8")
+        .body(surf::Body::from_json(&serde_json::json!({
+            "response_type": "ephemeral",
+            "text": message,
+        }))?)
+        .send()
+        .await
+        .map_err(|e| se!("slack response failed: {}", e))?;
+    Ok(resp
+        .body_form()
+        .await
+        .map_err(|e| se!("slack response form parse error {}", e))?)
+}
+
 #[derive(serde::Deserialize)]
 pub struct SlackUser {
     pub id: String,
@@ -88,26 +106,8 @@ struct SlackUserInfoParams {
     pub user: String,
 }
 
-pub async fn respond(response_url: &str, message: &str) -> crate::Result<serde_json::Value> {
-    let mut resp = surf::post(response_url)
-        .header("Content-type", "application/json; charset=utf-8")
-        .body(surf::Body::from_json(&serde_json::json!({
-            "response_type": "ephemeral",
-            "text": message,
-        }))?)
-        .send()
-        .await
-        .map_err(|e| se!("slack response failed: {}", e))?;
-    Ok(resp
-        .body_form()
-        .await
-        .map_err(|e| se!("slack response form parse error {}", e))?)
-}
-
-pub async fn get_user_name_email(
-    user_token: &str,
-    user_slack_id: &str,
-) -> crate::Result<SlackUserInfo> {
+#[allow(dead_code)]
+pub async fn user_info(user_token: &str, user_slack_id: &str) -> crate::Result<SlackUserInfo> {
     let mut resp = surf::get("https://slack.com/api/users.info")
         .header("authorization", format!("Bearer {}", user_token))
         .body(
@@ -125,37 +125,101 @@ pub async fn get_user_name_email(
         .map_err(|e| se!("json error {}", e))?)
 }
 
-// pub fn spotify_expiry_seconds_to_epoch_expiration(expires_in: u64) -> crate::Result<i64> {
-//     let now = std::time::SystemTime::now();
-//     Ok(now
-//         .checked_add(std::time::Duration::from_secs(expires_in - 60))
-//         .ok_or_else(|| format!("can't add {:?} to time {:?}", expires_in - 60, now))?
-//         .duration_since(std::time::UNIX_EPOCH)
-//         .map_err(|e| format!("invalid duration {:?}", e))?
-//         .as_secs() as i64)
-// }
+pub async fn schedule_message(
+    api_token: &str,
+    channel: &str,
+    text: &str,
+    post_at: chrono::DateTime<chrono::Utc>,
+) -> crate::Result<serde_json::Value> {
+    let mut resp = surf::post("https://slack.com/api/chat.scheduleMessage")
+        .header("Content-type", "application/json; charset=utf-8")
+        .header("Authorization", format!("Bearer {}", api_token))
+        .body(surf::Body::from_json(&serde_json::json!({
+            "channel": channel,
+            "text": text,
+            "post_at": post_at.timestamp(),
+        }))?)
+        .send()
+        .await
+        .map_err(|e| se!("slack schedule failed: {}", e))?;
+    Ok(resp
+        .body_json()
+        .await
+        .map_err(|e| se!("slack schedule parse error {}", e))?)
+}
 
-// pub async fn get_currently_playing(
-//     pool: &PgPool,
-//     user: &models::User,
-// ) -> crate::Result<Option<serde_json::Value>> {
-//     let access_token = get_user_access_token(pool, user).await?;
-//     let mut resp = surf::get("https://api.spotify.com/v1/me/player/currently-playing")
-//         .header("authorization", format!("Bearer {}", access_token))
-//         .send()
-//         .await
-//         .map_err(|e| format!("get currently playing error {:?}", e))?;
-//     if resp.status() == tide::StatusCode::NoContent {
-//         return Ok(None);
-//     }
-//     let resp: serde_json::Value = resp
-//         .body_json()
-//         .await
-//         .map_err(|e| format!("get currently playing json error {:?}", e))?;
-//     Ok(Some(resp))
-// }
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct SlackScheduledResponseMetadata {
+    next_cursor: String,
+}
 
-pub async fn get_user_access_token(pool: &PgPool, user: &models::User) -> crate::Result<String> {
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct SlackScheduledMessage {
+    pub id: String,
+    pub channel_id: String,
+    pub post_at: u64,
+    pub date_created: u64,
+    pub text: String,
+}
+impl SlackScheduledMessage {
+    pub fn post_at_dt(&self) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.from_utc_datetime(&chrono::NaiveDateTime::from_timestamp(
+            self.post_at as i64,
+            0,
+        ))
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct SlackScheduledMessages {
+    pub ok: bool,
+    pub scheduled_messages: Vec<SlackScheduledMessage>,
+    pub response_metadata: SlackScheduledResponseMetadata,
+}
+impl SlackScheduledMessages {
+    pub fn format_messages(&self) -> String {
+        let mut s = String::from("Scheduled:\n");
+        for msg in &self.scheduled_messages {
+            s.push_str(&format!(
+                "`{}` [{}]: {}",
+                msg.id,
+                msg.post_at_dt().to_string(),
+                msg.text
+            ));
+        }
+        s
+    }
+}
+
+pub async fn list_messages(
+    api_token: &str,
+    channel: &str,
+    after_ts: Option<chrono::DateTime<chrono::Utc>>,
+    before_ts: Option<chrono::DateTime<chrono::Utc>>,
+) -> crate::Result<SlackScheduledMessages> {
+    let mut map = HashMap::new();
+    map.insert("channel", Some(channel.to_string()));
+    map.insert("after_ts", after_ts.map(|ts| ts.timestamp().to_string()));
+    map.insert("before_ts", before_ts.map(|ts| ts.timestamp().to_string()));
+    map.retain(|_, v| v.is_some());
+    let mut resp = surf::post("https://slack.com/api/chat.scheduledMessages.list")
+        .header("Content-type", "application/json; charset=utf-8")
+        .header("Authorization", format!("Bearer {}", api_token))
+        .body(surf::Body::from_json(&map)?)
+        .send()
+        .await
+        .map_err(|e| se!("slack list failed: {}", e))?;
+    Ok(resp
+        .body_json()
+        .await
+        .map_err(|e| se!("slack list parse error {}", e))?)
+}
+
+pub async fn get_user_access_token(
+    pool: &PgPool,
+    slack_user_id: &str,
+    slack_team_id: &str,
+) -> crate::Result<String> {
     let slack_token = sqlx::query_as!(
         models::SlackToken,
         "
@@ -164,8 +228,8 @@ pub async fn get_user_access_token(pool: &PgPool, user: &models::User) -> crate:
             and slack_id = $1
             and slack_team_id = $2;
         ",
-        &user.slack_id,
-        &user.slack_team_id,
+        slack_user_id,
+        slack_team_id,
     )
     .fetch_one(pool)
     .await
@@ -178,17 +242,3 @@ pub async fn get_user_access_token(pool: &PgPool, user: &models::User) -> crate:
 
     Ok(access_token)
 }
-
-// pub async fn get_history(pool: &PgPool, user: &models::User) -> crate::Result<serde_json::Value> {
-//     let access_token = get_user_access_token(pool, user).await?;
-//     let mut resp = surf::get("https://api.spotify.com/v1/me/player/recently-played?limit=50")
-//         .header("authorization", format!("Bearer {}", access_token))
-//         .send()
-//         .await
-//         .map_err(|e| format!("get history error {:?}", e))?;
-//     let resp: serde_json::Value = resp
-//         .body_json()
-//         .await
-//         .map_err(|e| format!("get history json error {:?}", e))?;
-//     Ok(resp)
-// }

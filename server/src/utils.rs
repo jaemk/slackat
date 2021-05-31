@@ -2,6 +2,7 @@ use crate::Result;
 use chrono::offset::Utc;
 use chrono::{DateTime, Timelike};
 
+#[allow(dead_code)]
 pub fn truncate_to_minute(dt: DateTime<Utc>) -> Result<DateTime<Utc>> {
     Ok(dt
         .with_nanosecond(0)
@@ -10,6 +11,7 @@ pub fn truncate_to_minute(dt: DateTime<Utc>) -> Result<DateTime<Utc>> {
         .ok_or_else(|| format!("error setting seconds to zero: {:?}", dt))?)
 }
 
+#[allow(dead_code)]
 pub fn now_seconds() -> Result<i64> {
     Ok(std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
