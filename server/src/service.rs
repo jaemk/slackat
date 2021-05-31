@@ -363,6 +363,7 @@ async fn new_one_time_login_token(redirect: Option<String>) -> Result<String> {
     let s = serde_json::to_string(&OneTimeLoginToken { token: s, redirect })
         .map_err(|e| se!("token json error {}", e))?;
     let s = base64::encode_config(&s, base64::URL_SAFE);
+    // TODO: encrypt this
     let mut lock = crate::ONE_TIME_TOKENS.lock().await;
     lock.cache_set(s.clone(), ());
     Ok(s)

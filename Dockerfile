@@ -1,4 +1,4 @@
-FROM rust:1.50
+FROM rust:1.52
 
 RUN cargo install migrant --features postgres
 
