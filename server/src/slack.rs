@@ -178,7 +178,7 @@ pub struct SlackScheduledMessages {
 }
 impl SlackScheduledMessages {
     pub fn format_messages(&self) -> String {
-        let mut s = String::from("Scheduled:\n");
+        let mut s = String::new();
         for msg in &self.scheduled_messages {
             s.push_str(&format!(
                 "`{}` [{}]: {}",
@@ -186,6 +186,9 @@ impl SlackScheduledMessages {
                 msg.post_at_dt().to_string(),
                 msg.text
             ));
+        }
+        if s.is_empty() {
+            s.push_str("Nothing scheduled");
         }
         s
     }
