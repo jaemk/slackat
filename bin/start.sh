@@ -3,6 +3,7 @@
 set -e
 
 BUILD=false
+RELEASE=false
 
 function die_usage {
   echo "Usage: $(basename $0) [-bh]"
@@ -10,23 +11,31 @@ function die_usage {
   echo "Options:"
   echo "  -h           Show this beautiful message"
   echo "  -b           Build the artifacts if they're missing"
+  echo "  -r           Build in release mode"
   echo ""
   exit 1
 }
 
-while getopts "bh" opt; do
+while getopts "bhr" opt; do
   case $opt in
     b) BUILD=true ;;
+    r) RELEASE=true ;;
     h) die_usage ;;
     \? ) die_usage
       ;;
   esac
 done
 
-if $BUILD; then
-  (cd server; cargo build)
-  cp server/target/debug/server bin/server
-  echo "built the server"
+if $BUILD || $RELEASE; then
+  if $RELEASE; then
+    (cd server; cargo build --release)
+    cp server/target/release/server bin/server
+    echo "built the server (release)"
+  else
+    (cd server; cargo build)
+    cp server/target/debug/server bin/server
+    echo "built the server"
+  fi
 fi
 
 if [[ ! -f bin/server ]]; then
@@ -34,12 +43,7 @@ if [[ ! -f bin/server ]]; then
   exit 1
 fi
 
-if [[ -f /etc/secrets/.env ]]; then
-  echo "copying /etc/secrets/.env to .env"
-  cp /etc/secrets/.env .env
-  cp /etc/secrets/.env server/.env
-fi
-
+(cd server/ && migrant setup)
 (cd server/ && migrant list)
 (cd server/ && migrant apply -a || true)
 
