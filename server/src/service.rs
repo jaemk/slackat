@@ -169,20 +169,41 @@ async fn _handle_command(ctx: &Context, cmd: &SlackCommand) -> Result<()> {
     let response = match parsed {
         ParsedCommand::Help => Some(String::from("Ex. /at in 20 minutes send Time's up!")),
         ParsedCommand::List => {
-            let listed = slack::list_messages(&access_token, &cmd.channel_id, None, None).await?;
-            Some(listed.format_messages())
+            match slack::list_messages(&access_token, &cmd.channel_id, None, None).await {
+                Ok(listed) => Some(listed.format_messages()),
+                Err(slack::SlackError::Api(e)) => {
+                    Some(format!("Error listing messages.\nReason: {}", e))
+                }
+                Err(e) => return Err(e.into()),
+            }
         }
         ParsedCommand::Schedule(ScheduleArgs { text, post_at }) => {
-            slack::schedule_message(&access_token, &cmd.channel_id, &text, post_at).await?;
-            Some(format!(
-                "Scheduled \"{}\" to be sent at {}",
-                text,
-                post_at.to_string()
-            ))
+            if let Err(slack::SlackError::Api(e)) =
+                slack::schedule_message(&access_token, &cmd.channel_id, &text, post_at).await
+            {
+                Some(format!(
+                    "Error scheduling message \"{}\" [{}]\nReason: {}",
+                    text,
+                    post_at.to_string(),
+                    e
+                ))
+            } else {
+                Some(format!(
+                    "Scheduled \"{}\" to be sent at {}",
+                    text,
+                    post_at.to_string()
+                ))
+            }
         }
         ParsedCommand::Cancel(message_id) => {
-            slog::info!(LOG, "got cancel: {}", message_id);
-            Some("cancel!".to_string())
+            match slack::delete_message(&access_token, &cmd.channel_id, &message_id).await {
+                Ok(_) => Some(format!("Cancelled `{}`", message_id)),
+                Err(slack::SlackError::Api(e)) => Some(format!(
+                    "Error deleting scheduled message `{}`.\nReason: {}",
+                    message_id, e
+                )),
+                Err(e) => return Err(e.into()),
+            }
         }
         ParsedCommand::Error(err) => {
             slog::error!(
@@ -253,6 +274,9 @@ async fn status(_req: tide::Request<Context>) -> tide::Result {
         version: &CONFIG.version
     }))
 }
+
+// TODO: add basic login flow for identifying users without re-installing the app
+// https://api.slack.com/docs/sign-in-with-slack
 
 /// The login process uses slack to authenticate the current user
 /// which then redirects back to our callback url with a code we
