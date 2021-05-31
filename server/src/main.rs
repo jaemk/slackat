@@ -160,11 +160,14 @@ impl Config {
         let p = if self.ssl { "https" } else { "http" };
         format!("{}://{}:{}", p, self.host, self.port)
     }
-    pub fn redirect_host(&self) -> String {
+    pub fn real_host(&self) -> String {
         self.real_hostname.clone().unwrap_or_else(|| self.host())
     }
+    pub fn login_url(&self) -> String {
+        format!("{}/login", self.real_host())
+    }
     pub fn slack_redirect_url(&self) -> String {
-        format!("{}/login/slack", self.redirect_host())
+        format!("{}/login/slack", self.real_host())
     }
     pub fn domain(&self) -> String {
         self.real_domain

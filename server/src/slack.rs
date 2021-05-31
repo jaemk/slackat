@@ -219,7 +219,7 @@ pub async fn get_user_access_token(
     pool: &PgPool,
     slack_user_id: &str,
     slack_team_id: &str,
-) -> crate::Result<String> {
+) -> crate::Result<Option<String>> {
     let slack_token = sqlx::query_as!(
         models::SlackToken,
         "
@@ -231,14 +231,18 @@ pub async fn get_user_access_token(
         slack_user_id,
         slack_team_id,
     )
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await
     .map_err(|e| se!("db error {}", e))?;
-    let access_token = crypto::decrypt(&crypto::Enc {
-        value: slack_token.encrypted,
-        salt: slack_token.salt,
-        nonce: slack_token.nonce,
-    })?;
 
-    Ok(access_token)
+    if let Some(slack_token) = slack_token {
+        let access_token = crypto::decrypt(&crypto::Enc {
+            value: slack_token.encrypted,
+            salt: slack_token.salt,
+            nonce: slack_token.nonce,
+        })?;
+        Ok(Some(access_token))
+    } else {
+        Ok(None)
+    }
 }

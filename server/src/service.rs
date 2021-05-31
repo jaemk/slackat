@@ -11,12 +11,9 @@ macro_rules! user_or_redirect {
         let user = get_auth_user(&$req).await;
         if user.is_none() {
             let path = $req.url().path();
-            return Ok(tide::Redirect::new(format!(
-                "{}/login?redirect={}",
-                CONFIG.redirect_host(),
-                path
-            ))
-            .into());
+            return Ok(
+                tide::Redirect::new(format!("{}?redirect={}", CONFIG.login_url(), path)).into(),
+            );
         }
         user.unwrap()
     }};
@@ -154,6 +151,19 @@ fn _parse_command(cmd: &SlackCommand) -> Result<ParsedCommand> {
 
 async fn _handle_command(ctx: &Context, cmd: &SlackCommand) -> Result<()> {
     let access_token = get_user_access_token(&ctx.pool, &cmd.user_id, &cmd.team_id).await?;
+    if access_token.is_none() {
+        slack::respond(
+            &cmd.response_url,
+            &format!(
+                "Whoops, looks like you need to login: {}",
+                CONFIG.login_url(),
+            ),
+        )
+        .await
+        .map_err(|e| se!("error sending slack response to prompt login {:?}", e))?;
+        return Ok(());
+    }
+    let access_token = access_token.unwrap();
     let parsed = _parse_command(cmd)?;
 
     let response = match parsed {
@@ -329,7 +339,7 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
         if !redirect.contains("login") {
             slog::info!(LOG, "found login redirect {:?}", redirect);
             let mut resp: tide::Response =
-                tide::Redirect::new(format!("{}{}", CONFIG.redirect_host(), redirect)).into();
+                tide::Redirect::new(format!("{}{}", CONFIG.real_host(), redirect)).into();
             resp.insert_header("set-cookie", cookie_str);
             return Ok(resp);
         }
