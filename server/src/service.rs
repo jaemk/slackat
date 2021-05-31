@@ -81,14 +81,14 @@ enum ParsedCommand {
 
 fn _is_help(s: &str) -> bool {
     lazy_static::lazy_static! {
-        static ref HELP_RE: Regex = Regex::new("^(h|-h|help|--help)$").unwrap();
+        static ref HELP_RE: Regex = Regex::new("(?i)^(h|-h|help|--help)$").unwrap();
     }
     HELP_RE.is_match(s)
 }
 
 fn _is_list(s: &str) -> bool {
     lazy_static::lazy_static! {
-        static ref LIST_RE: Regex = Regex::new("^(l|-l|list|--list)$").unwrap();
+        static ref LIST_RE: Regex = Regex::new("(?i)^(l|-l|list|--list)$").unwrap();
     }
     LIST_RE.is_match(s)
 }
