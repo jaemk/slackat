@@ -259,7 +259,7 @@ async fn slack_command(mut req: tide::Request<Context>) -> tide::Result {
 
 async fn index(req: tide::Request<Context>) -> tide::Result {
     let user = user_or_redirect!(req);
-    return Ok(resp!(status => 200, message => format!("hello, {}!", user.id)));
+    return Ok(resp!(status => 200, message => format!("Hello, {}!", user.id)));
 }
 
 #[derive(serde::Serialize)]
@@ -370,10 +370,8 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
     }
     Ok(tide::Response::builder(200)
         .header("set-cookie", cookie_str)
-        .body(serde_json::json!({
-            "ok": "ok",
-            "user.id": user.id,
-        }))
+        .header("content-type", "text/plain")
+        .body(format!("Welcome, {}!", user.id))
         .build())
 }
 
