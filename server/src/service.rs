@@ -326,20 +326,20 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
     slog::info!(LOG, "got login redirect");
     let ctx = req.state();
     let auth_callback: AuthCallback = req.query().map_err(|e| se!("query parse error: {:?}", e))?;
-    if !OneTimeLoginToken::is_valid(&auth_callback.state).await {
-        return Ok(tide::Response::builder(400)
-            .body(serde_json::json!({
-                "error": format!("invalid one-time login token {}", auth_callback.state)
-            }))
-            .build());
-    }
     let login_token = OneTimeLoginToken::decode(&auth_callback.state)
         .map_err(|e| se!("login token load error {:?}", e))?;
     slog::info!(LOG, "login token {:?}", login_token);
 
     if let Some(login_proxy) = login_token.login_proxy {
-        if !login_proxy.starts_with(&CONFIG.real_host()) {
-            slog::info!(LOG, "found auth login proxy: {}", login_proxy);
+        slog::info!(LOG, "found auth login proxy: {}", login_proxy);
+        let real_host = CONFIG.real_host();
+        if !login_proxy.starts_with(&real_host) {
+            slog::info!(
+                LOG,
+                "forwarding to login proxy: {} from {}",
+                login_proxy,
+                real_host
+            );
             let proxy_to = format!("{}{}", login_proxy, req.url().query().unwrap_or(""));
             slog::debug!(LOG, "login proxy {}", proxy_to);
             let mut r = surf::get(proxy_to);
@@ -362,6 +362,14 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
                 .build();
             return Ok(resp);
         }
+    }
+
+    if !OneTimeLoginToken::is_valid(&auth_callback.state).await {
+        return Ok(tide::Response::builder(400)
+            .body(serde_json::json!({
+                "error": format!("invalid one-time login token {}", auth_callback.state)
+            }))
+            .build());
     }
 
     let slack_access = slack::exchange_access_token(&auth_callback.code)

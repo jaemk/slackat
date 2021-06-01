@@ -117,6 +117,7 @@ pub struct Config {
     pub encryption_key: String,
 
     // key used for encrypting data sent in the slack login token
+    pub slack_auth_login_redirect: Option<String>,
     pub slack_auth_encryption_key: String,
 
     // key used for generating auth tokens
@@ -159,6 +160,7 @@ impl Config {
             slack_client_id: env_or("SLACK_CLIENT_ID", "fake"),
             slack_secret_id: env_or("SLACK_SECRET_ID", "fake"),
             encryption_key: env_or("ENCRYPTION_KEY", "01234567890123456789012345678901"),
+            slack_auth_login_redirect: env::var("SLACK_AUTH_LOGIN_REDIRECT").ok(),
             slack_auth_encryption_key: env_or(
                 "SLACK_AUTH_ENCRYPTION_KEY",
                 "01234567890123456789012345678901",
@@ -192,7 +194,9 @@ impl Config {
         format!("{}/login", self.real_host())
     }
     pub fn slack_redirect_url(&self) -> String {
-        format!("{}/login/slack", self.real_host())
+        self.slack_auth_login_redirect
+            .clone()
+            .unwrap_or_else(|| format!("{}/login/slack", self.real_host()))
     }
     pub fn domain(&self) -> String {
         self.real_domain
