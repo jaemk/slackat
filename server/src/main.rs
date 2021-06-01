@@ -91,20 +91,41 @@ macro_rules! resp {
 #[derive(serde::Deserialize)]
 pub struct Config {
     pub version: String,
+
+    // whether to listen on https or http
     pub ssl: bool,
+
+    // host to listen on, defaults to localhost
     pub host: String,
+    pub port: u16,
+
+    // the "real" hostname (https://slackat.com) and domain slackat.com
+    // used for building redirects
     pub real_hostname: Option<String>,
     pub real_domain: Option<String>,
-    pub port: u16,
+
+    // json or pretty
     pub log_format: String,
     pub log_level: String,
-    pub slack_client_id: String,
-    pub slack_secret_id: String,
+
+    // db config
     pub db_url: String,
     pub db_max_connections: u32,
+
+    // key used for encrypting slack auth tokens and things
+    // saved in the db
     pub encryption_key: String,
+
+    // key used for encrypting data sent in the slack login token
+    pub slack_auth_encryption_key: String,
+
+    // key used for generating auth tokens
     pub signing_key: String,
     pub auth_expiration_seconds: u32,
+
+    // slack secrets
+    pub slack_client_id: String,
+    pub slack_secret_id: String,
 }
 impl Config {
     pub fn load() -> Self {
@@ -119,26 +140,30 @@ impl Config {
             version,
             ssl: env_or("SSL", "false") == "true",
             host: env_or("HOST", "localhost"),
+            port: env_or("PORT", "3030").parse().expect("invalid port"),
             real_hostname: env::var("REAL_HOSTNAME").ok(),
             real_domain: env::var("REAL_DOMAIN").ok(),
-            port: env_or("PORT", "3030").parse().expect("invalid port"),
             log_format: env_or("LOG_FORMAT", "json")
                 .to_lowercase()
                 .trim()
                 .to_string(),
             log_level: env_or("LOG_LEVEL", "INFO"),
-            slack_client_id: env_or("SLACK_CLIENT_ID", "fake"),
-            slack_secret_id: env_or("SLACK_SECRET_ID", "fake"),
             db_url: env_or("DATABASE_URL", "error"),
             db_max_connections: env_or("DATABASE_MAX_CONNECTIONS", "5")
                 .parse()
                 .expect("invalid DATABASE_MAX_CONNECTIONS"),
-            encryption_key: env_or("ENCRYPTION_KEY", "01234567890123456789012345678901"),
-            signing_key: env_or("SIGNING_KEY", "01234567890123456789012345678901"),
             // 60 * 24 * 30
             auth_expiration_seconds: env_or("AUTH_EXPIRATION_SECONDS", "43200")
                 .parse()
                 .expect("invalid auth_expiration_seconds"),
+            slack_client_id: env_or("SLACK_CLIENT_ID", "fake"),
+            slack_secret_id: env_or("SLACK_SECRET_ID", "fake"),
+            encryption_key: env_or("ENCRYPTION_KEY", "01234567890123456789012345678901"),
+            slack_auth_encryption_key: env_or(
+                "SLACK_AUTH_ENCRYPTION_KEY",
+                "01234567890123456789012345678901",
+            ),
+            signing_key: env_or("SIGNING_KEY", "01234567890123456789012345678901"),
         }
     }
     pub fn initialize(&self) {

@@ -3,6 +3,7 @@ use chrono::{Duration, TimeZone, Utc};
 use regex::Regex;
 use sqlx::PgPool;
 
+use crate::crypto::Enc;
 use crate::slack::get_user_access_token;
 use crate::{crypto, models, resp, se, slack, Result, CONFIG, LOG};
 
@@ -283,7 +284,15 @@ async fn status(_req: tide::Request<Context>) -> tide::Result {
 /// can use to generate a reusable access token.
 async fn login(req: tide::Request<Context>) -> tide::Result {
     let maybe_redirect: MaybeRedirect = req.query().map_err(|e| se!("query parse error {}", e))?;
-    let token = new_one_time_login_token(maybe_redirect.redirect.clone())
+    let login_proxy = if CONFIG.real_host() != "https://slackat.com" {
+        Some(CONFIG.slack_redirect_url())
+    } else {
+        None
+    };
+    let token = OneTimeLoginToken::new()
+        .with_redirect(maybe_redirect.redirect.clone())
+        .with_login_proxy(login_proxy)
+        .encode()
         .await
         .map_err(|e| se!("error generating new one time login token {}", e))?;
 
@@ -317,18 +326,43 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
     slog::info!(LOG, "got login redirect");
     let ctx = req.state();
     let auth_callback: AuthCallback = req.query().map_err(|e| se!("query parse error: {:?}", e))?;
-    if !is_valid_one_time_login_token(&auth_callback).await {
+    if !OneTimeLoginToken::is_valid(&auth_callback.state).await {
         return Ok(tide::Response::builder(400)
             .body(serde_json::json!({
                 "error": format!("invalid one-time login token {}", auth_callback.state)
             }))
             .build());
     }
-    let token_bytes =
-        base64::decode(&auth_callback.state).map_err(|e| se!("decode error {}", e))?;
-    let token_str = String::from_utf8(token_bytes).map_err(|e| se!("token utf8 error {}", e))?;
-    let login_token: OneTimeLoginToken =
-        serde_json::from_str(&token_str).map_err(|e| se!("deserialize token error {}", e))?;
+    let login_token = OneTimeLoginToken::decode(&auth_callback.state)
+        .map_err(|e| se!("login token load error {:?}", e))?;
+    slog::info!(LOG, "login token {:?}", login_token);
+
+    if let Some(login_proxy) = login_token.login_proxy {
+        if !login_proxy.starts_with(&CONFIG.real_host()) {
+            slog::info!(LOG, "found auth login proxy: {}", login_proxy);
+            let proxy_to = format!("{}{}", login_proxy, req.url().query().unwrap_or(""));
+            slog::debug!(LOG, "login proxy {}", proxy_to);
+            let mut r = surf::get(proxy_to);
+            for (k, v) in req.iter() {
+                r = r.header(k, v);
+            }
+            let mut proxy_resp = r.send().await.map_err(|e| se!("login proxy error {}", e))?;
+
+            let mut resp = tide::Response::builder(proxy_resp.status());
+            for (k, v) in proxy_resp.iter() {
+                resp = resp.header(k, v);
+            }
+            let resp = resp
+                .body(
+                    proxy_resp
+                        .body_bytes()
+                        .await
+                        .map_err(|e| se!("error reading proxy response body: {:?}", e))?,
+                )
+                .build();
+            return Ok(resp);
+        }
+    }
 
     let slack_access = slack::exchange_access_token(&auth_callback.code)
         .await
@@ -385,25 +419,63 @@ struct AuthCallback {
 struct OneTimeLoginToken {
     token: String,
     redirect: Option<String>,
+    login_proxy: Option<String>,
 }
+impl OneTimeLoginToken {
+    fn new() -> Self {
+        let s = uuid::Uuid::new_v4()
+            .to_simple()
+            .encode_lower(&mut uuid::Uuid::encode_buffer())
+            .to_string();
+        OneTimeLoginToken {
+            token: s,
+            redirect: None,
+            login_proxy: None,
+        }
+    }
 
-async fn new_one_time_login_token(redirect: Option<String>) -> Result<String> {
-    let s = uuid::Uuid::new_v4()
-        .to_simple()
-        .encode_lower(&mut uuid::Uuid::encode_buffer())
-        .to_string();
-    let s = serde_json::to_string(&OneTimeLoginToken { token: s, redirect })
-        .map_err(|e| se!("token json error {}", e))?;
-    let s = base64::encode_config(&s, base64::URL_SAFE);
-    // TODO: encrypt this
-    let mut lock = crate::ONE_TIME_TOKENS.lock().await;
-    lock.cache_set(s.clone(), ());
-    Ok(s)
-}
+    fn with_redirect(&mut self, redirect: Option<String>) -> &mut Self {
+        self.redirect = redirect;
+        self
+    }
 
-async fn is_valid_one_time_login_token(auth: &AuthCallback) -> bool {
-    let mut lock = crate::ONE_TIME_TOKENS.lock().await;
-    lock.cache_remove(&auth.state).is_some()
+    fn with_login_proxy(&mut self, login_proxy: Option<String>) -> &mut Self {
+        self.login_proxy = login_proxy;
+        self
+    }
+
+    async fn encode(&self) -> Result<String> {
+        let s = serde_json::to_string(self).map_err(|e| se!("token json error {}", e))?;
+        let s = base64::encode_config(&s, base64::URL_SAFE);
+
+        let enc = crypto::encrypt_with_key(&s, &CONFIG.slack_auth_encryption_key)?;
+        let s = serde_json::to_string(&enc).map_err(|e| se!("token enc json error {}", e))?;
+        let s = base64::encode_config(&s, base64::URL_SAFE);
+
+        let mut lock = crate::ONE_TIME_TOKENS.lock().await;
+        lock.cache_set(s.clone(), ());
+        Ok(s)
+    }
+
+    #[allow(clippy::ptr_arg)]
+    async fn is_valid(token: &String) -> bool {
+        let mut lock = crate::ONE_TIME_TOKENS.lock().await;
+        lock.cache_remove(token).is_some()
+    }
+
+    fn decode(token: &str) -> Result<Self> {
+        let enc_bytes =
+            base64::decode(token).map_err(|e| se!("error decoding enc login token {:?}", e))?;
+        let enc: Enc = serde_json::from_slice(&enc_bytes)
+            .map_err(|e| se!("error deserializing enc login data {:?}", e))?;
+        let token = crypto::decrypt_with_key(&enc, &CONFIG.slack_auth_encryption_key)
+            .map_err(|e| se!("error decrypting login token {:?}", e))?;
+        let token_bytes =
+            base64::decode(&token).map_err(|e| se!("login token decoding error {:?}", e))?;
+        let login_token: OneTimeLoginToken = serde_json::from_slice(&token_bytes)
+            .map_err(|e| se!("deserialize token error {:?}", e))?;
+        Ok(login_token)
+    }
 }
 
 #[derive(serde::Deserialize)]

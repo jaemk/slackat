@@ -126,6 +126,7 @@ pub fn decrypt_bytes<'a>(
     Ok(out_slice)
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Enc {
     pub value: String,
     pub nonce: String,
@@ -133,15 +134,14 @@ pub struct Enc {
 }
 
 pub fn encrypt(s: &str) -> crate::Result<Enc> {
+    encrypt_with_key(s, &CONFIG.encryption_key)
+}
+
+pub fn encrypt_with_key(s: &str, key: &str) -> crate::Result<Enc> {
     let nonce = new_nonce().map_err(|_| "error generating nonce")?;
     let salt = new_salt().map_err(|_| "error generating salt")?;
-    let b = encrypt_bytes(
-        s.as_bytes(),
-        &nonce,
-        CONFIG.encryption_key.as_bytes(),
-        &salt,
-    )
-    .map_err(|_| "encryption error")?;
+    let b = encrypt_bytes(s.as_bytes(), &nonce, key.as_bytes(), &salt)
+        .map_err(|_| "encryption error")?;
     let value = hex::encode(&b);
     let nonce = hex::encode(&nonce);
     let salt = hex::encode(&salt);
@@ -149,16 +149,15 @@ pub fn encrypt(s: &str) -> crate::Result<Enc> {
 }
 
 pub fn decrypt(enc: &Enc) -> crate::Result<String> {
+    decrypt_with_key(enc, &CONFIG.encryption_key)
+}
+
+pub fn decrypt_with_key(enc: &Enc, key: &str) -> crate::Result<String> {
     let nonce = hex::decode(&enc.nonce).map_err(|_| "nonce hex decode error")?;
     let salt = hex::decode(&enc.salt).map_err(|_| "salt hex decode error")?;
     let mut value = hex::decode(&enc.value).map_err(|_| "value hex decode error")?;
-    let bytes = decrypt_bytes(
-        value.as_mut_slice(),
-        &nonce,
-        CONFIG.encryption_key.as_bytes(),
-        &salt,
-    )
-    .map_err(|_| "encryption error")?;
+    let bytes = decrypt_bytes(value.as_mut_slice(), &nonce, key.as_bytes(), &salt)
+        .map_err(|_| "encryption error")?;
     let s = String::from_utf8(bytes.to_owned()).map_err(|_| "error decrypting bytes")?;
     Ok(s)
 }
