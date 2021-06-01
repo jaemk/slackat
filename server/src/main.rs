@@ -119,6 +119,7 @@ pub struct Config {
     // key used for encrypting data sent in the slack login token
     pub slack_auth_login_redirect: Option<String>,
     pub slack_auth_encryption_key: String,
+    pub slack_auth_signing_key: String,
 
     // key used for generating auth tokens
     pub signing_key: String,
@@ -163,6 +164,10 @@ impl Config {
             slack_auth_login_redirect: env::var("SLACK_AUTH_LOGIN_REDIRECT").ok(),
             slack_auth_encryption_key: env_or(
                 "SLACK_AUTH_ENCRYPTION_KEY",
+                "01234567890123456789012345678901",
+            ),
+            slack_auth_signing_key: env_or(
+                "SLACK_AUTH_SIGNING_KEY",
                 "01234567890123456789012345678901",
             ),
             signing_key: env_or("SIGNING_KEY", "01234567890123456789012345678901"),

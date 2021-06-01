@@ -329,6 +329,10 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
     let login_token = OneTimeLoginToken::decode(&auth_callback.state)
         .map_err(|e| se!("login token load error {:?}", e))?;
     slog::info!(LOG, "login token {:?}", login_token);
+    if !login_token.is_valid_signature() {
+        slog::error!(LOG, "found invalid token signature");
+        return Ok(resp!(status => 400, message => "invalid token signature"));
+    }
 
     if let Some(login_proxy) = login_token.login_proxy {
         slog::info!(LOG, "found auth login proxy: {}", login_proxy);
@@ -425,6 +429,7 @@ struct AuthCallback {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct OneTimeLoginToken {
     token: String,
+    token_signature: String,
     redirect: Option<String>,
     login_proxy: Option<String>,
 }
@@ -435,7 +440,8 @@ impl OneTimeLoginToken {
             .encode_lower(&mut uuid::Uuid::encode_buffer())
             .to_string();
         OneTimeLoginToken {
-            token: s,
+            token: s.clone(),
+            token_signature: crypto::hmac_sign_with_key(&s, &CONFIG.slack_auth_signing_key),
             redirect: None,
             login_proxy: None,
         }
@@ -462,6 +468,14 @@ impl OneTimeLoginToken {
         let mut lock = crate::ONE_TIME_TOKENS.lock().await;
         lock.cache_set(s.clone(), ());
         Ok(s)
+    }
+
+    fn is_valid_signature(&self) -> bool {
+        crypto::hmac_verify_with_key(
+            &self.token,
+            &self.token_signature,
+            &CONFIG.slack_auth_signing_key,
+        )
     }
 
     #[allow(clippy::ptr_arg)]

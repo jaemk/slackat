@@ -46,13 +46,24 @@ pub fn new_salt() -> crate::Result<Vec<u8>> {
 }
 
 pub fn hmac_sign(s: &str) -> String {
+    hmac_sign_with_key(s, &crate::CONFIG.signing_key)
+}
+pub fn hmac_sign_with_key(s: &str, key: &str) -> String {
     // using a 32 byte key
-    let s_key = ring::hmac::Key::new(
-        ring::hmac::HMAC_SHA256,
-        &crate::CONFIG.encryption_key.as_bytes(),
-    );
+    let s_key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key.as_bytes());
     let tag = ring::hmac::sign(&s_key, s.as_bytes());
     hex::encode(&tag)
+}
+
+#[allow(dead_code)]
+pub fn hmac_verify(text: &str, sig: &str) -> bool {
+    hmac_verify_with_key(text, sig, &crate::CONFIG.signing_key)
+}
+
+pub fn hmac_verify_with_key(text: &str, sig: &str, key: &str) -> bool {
+    // using a 32 byte key
+    let s_key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key.as_bytes());
+    ring::hmac::verify(&s_key, text.as_bytes(), sig.as_bytes()).is_ok()
 }
 
 /// Return the SHA256 hash of `bytes`
