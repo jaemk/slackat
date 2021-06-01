@@ -198,6 +198,9 @@ impl Config {
             .clone()
             .unwrap_or_else(|| format!("{}/login/slack", self.real_host()))
     }
+    pub fn slack_redirect_proxy_url(&self) -> String {
+        format!("{}/login/slack", self.real_host())
+    }
     pub fn domain(&self) -> String {
         self.real_domain
             .clone()

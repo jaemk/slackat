@@ -285,7 +285,7 @@ async fn status(_req: tide::Request<Context>) -> tide::Result {
 async fn login(req: tide::Request<Context>) -> tide::Result {
     let maybe_redirect: MaybeRedirect = req.query().map_err(|e| se!("query parse error {}", e))?;
     let login_proxy = if CONFIG.real_host() != "https://slackat.com" {
-        Some(CONFIG.slack_redirect_url())
+        Some(CONFIG.slack_redirect_proxy_url())
     } else {
         None
     };
@@ -340,8 +340,7 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
                 login_proxy,
                 real_host
             );
-            let proxy_to = format!("{}{}", login_proxy, req.url().query().unwrap_or(""));
-            slog::debug!(LOG, "login proxy {}", proxy_to);
+            let proxy_to = format!("{}?{}", login_proxy, req.url().query().unwrap_or(""));
             let mut r = surf::get(proxy_to);
             for (k, v) in req.iter() {
                 r = r.header(k, v);
