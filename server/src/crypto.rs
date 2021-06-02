@@ -61,9 +61,15 @@ pub fn hmac_verify(text: &str, sig: &str) -> bool {
 }
 
 pub fn hmac_verify_with_key(text: &str, sig: &str, key: &str) -> bool {
+    let sig = hex::decode(sig);
+    let sig = if let Ok(sig) = sig {
+        sig
+    } else {
+        return false;
+    };
     // using a 32 byte key
     let s_key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key.as_bytes());
-    ring::hmac::verify(&s_key, text.as_bytes(), sig.as_bytes()).is_ok()
+    ring::hmac::verify(&s_key, text.as_bytes(), &sig).is_ok()
 }
 
 /// Return the SHA256 hash of `bytes`
