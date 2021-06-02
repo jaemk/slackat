@@ -116,9 +116,20 @@ pub struct Config {
     // saved in the db
     pub encryption_key: String,
 
-    // key used for encrypting data sent in the slack login token
+    // -- The following are workarounds to deal with slack not
+    // -- letting you specify two different login redirect hosts
+    // -- despite the docs and examples making it look like you can.
+    // an explicit slack auth login redirect to send to slack
+    // on login requests instead of building one from this server's "real host"
     pub slack_auth_login_redirect: Option<String>,
+    // these two keys are intended to be shared between dev environments
+    // and the "prod" deployed environment. These are used to encrypt
+    // and sign the slack auth redirect data which the prod env needs to
+    // be able to decrypt and verify in order to redirect login requests
+    // to dev environments.
+    // -- key used for encrypting data sent in the slack login token
     pub slack_auth_encryption_key: String,
+    // -- key used for signing the one-time-token sent to slack
     pub slack_auth_signing_key: String,
 
     // key used for generating auth tokens
