@@ -350,6 +350,7 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
                 r = r.header(k, v);
             }
             let mut proxy_resp = r.send().await.map_err(|e| se!("login proxy error {}", e))?;
+            slog::info!(LOG, "got proxy response {:?}", proxy_resp);
 
             let mut resp = tide::Response::builder(proxy_resp.status());
             for (k, v) in proxy_resp.iter() {
@@ -363,6 +364,8 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
                         .map_err(|e| se!("error reading proxy response body: {:?}", e))?,
                 )
                 .build();
+
+            slog::info!(LOG, "returning proxied response {:?}", resp);
             return Ok(resp);
         }
     }
