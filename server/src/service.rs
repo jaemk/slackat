@@ -493,8 +493,9 @@ impl OneTimeLoginToken {
             .map_err(|e| se!("error decrypting login token {:?}", e))?;
         let token_bytes =
             base64::decode(&token).map_err(|e| se!("login token decoding error {:?}", e))?;
+        let s = String::from_utf8(token_bytes.clone()).ok();
         let login_token: OneTimeLoginToken = serde_json::from_slice(&token_bytes)
-            .map_err(|e| se!("deserialize token error {:?}", e))?;
+            .map_err(|e| se!("deserialize token error {:?} {:?}", e, s))?;
         Ok(login_token)
     }
 }
