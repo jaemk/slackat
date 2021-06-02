@@ -353,16 +353,17 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
             for (k, v) in req.iter() {
                 r = r.header(k, v);
             }
+            // overwrite the host header
+            if let Some(login_proxy_domain) = login_token.login_proxy_domain {
+                r = r.header("host", login_proxy_domain);
+            }
+            slog::info!(LOG, "sending proxy request {:?}", r);
             let mut proxy_resp = r.send().await.map_err(|e| se!("login proxy error {}", e))?;
             slog::info!(LOG, "got proxy response {:?}", proxy_resp);
 
             let mut resp = tide::Response::builder(proxy_resp.status());
             for (k, v) in proxy_resp.iter() {
                 resp = resp.header(k, v);
-            }
-            // overwrite the host header
-            if let Some(login_proxy_domain) = login_token.login_proxy_domain {
-                resp = resp.header("host", login_proxy_domain);
             }
             let resp = resp
                 .body(
