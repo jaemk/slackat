@@ -327,12 +327,12 @@ async fn login(req: tide::Request<Context>) -> tide::Result {
 /// one-time-token that we use to assert that this login attempt was one
 /// that we initiated and only happens once.
 async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
-    slog::info!(LOG, "got login redirect");
+    slog::info!(LOG, "got slack login redirect");
     let ctx = req.state();
     let auth_callback: AuthCallback = req.query().map_err(|e| se!("query parse error: {:?}", e))?;
     let login_token = OneTimeLoginToken::decode(&auth_callback.state)
         .map_err(|e| se!("login token load error {:?}", e))?;
-    slog::info!(LOG, "login token {:?}", login_token);
+    slog::debug!(LOG, "login token {:?}", login_token);
     if !login_token.is_valid_signature() {
         slog::error!(LOG, "found invalid token signature");
         return Ok(resp!(status => 400, message => "invalid token signature"));
@@ -357,9 +357,9 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
             if let Some(login_proxy_domain) = login_token.login_proxy_domain {
                 r = r.header("host", login_proxy_domain);
             }
-            slog::info!(LOG, "sending proxy request {:?}", r);
+            slog::debug!(LOG, "sending proxy request {:?}", r);
             let mut proxy_resp = r.send().await.map_err(|e| se!("login proxy error {}", e))?;
-            slog::info!(LOG, "got proxy response {:?}", proxy_resp);
+            slog::debug!(LOG, "got proxy response {:?}", proxy_resp);
 
             let mut resp = tide::Response::builder(proxy_resp.status());
             for (k, v) in proxy_resp.iter() {
@@ -374,7 +374,7 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
                 )
                 .build();
 
-            slog::info!(LOG, "returning proxied response {:?}", resp);
+            slog::debug!(LOG, "returning proxied response {:?}", resp);
             return Ok(resp);
         }
     }
