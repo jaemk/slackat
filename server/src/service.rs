@@ -284,14 +284,18 @@ async fn status(_req: tide::Request<Context>) -> tide::Result {
 /// can use to generate a reusable access token.
 async fn login(req: tide::Request<Context>) -> tide::Result {
     let maybe_redirect: MaybeRedirect = req.query().map_err(|e| se!("query parse error {}", e))?;
-    let login_proxy = if CONFIG.real_host() != "https://slackat.com" {
-        Some(CONFIG.slack_redirect_proxy_url())
+    let (login_proxy, login_proxy_domain) = if CONFIG.domain() != "slackat.com" {
+        (
+            Some(CONFIG.slack_redirect_proxy_url()),
+            Some(CONFIG.domain()),
+        )
     } else {
-        None
+        (None, None)
     };
     let token = OneTimeLoginToken::new()
         .with_redirect(maybe_redirect.redirect.clone())
         .with_login_proxy(login_proxy)
+        .with_login_proxy_domain(login_proxy_domain)
         .encode()
         .await
         .map_err(|e| se!("error generating new one time login token {}", e))?;
@@ -355,6 +359,10 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
             let mut resp = tide::Response::builder(proxy_resp.status());
             for (k, v) in proxy_resp.iter() {
                 resp = resp.header(k, v);
+            }
+            // overwrite the host header
+            if let Some(login_proxy_domain) = login_token.login_proxy_domain {
+                resp = resp.header("host", login_proxy_domain);
             }
             let resp = resp
                 .body(
@@ -435,6 +443,7 @@ struct OneTimeLoginToken {
     token_signature: String,
     redirect: Option<String>,
     login_proxy: Option<String>,
+    login_proxy_domain: Option<String>,
 }
 impl OneTimeLoginToken {
     fn new() -> Self {
@@ -447,6 +456,7 @@ impl OneTimeLoginToken {
             token_signature: crypto::hmac_sign_with_key(&s, &CONFIG.slack_auth_signing_key),
             redirect: None,
             login_proxy: None,
+            login_proxy_domain: None,
         }
     }
 
@@ -457,6 +467,11 @@ impl OneTimeLoginToken {
 
     fn with_login_proxy(&mut self, login_proxy: Option<String>) -> &mut Self {
         self.login_proxy = login_proxy;
+        self
+    }
+
+    fn with_login_proxy_domain(&mut self, login_proxy_domain: Option<String>) -> &mut Self {
+        self.login_proxy_domain = login_proxy_domain;
         self
     }
 
