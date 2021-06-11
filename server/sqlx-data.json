@@ -46,6 +46,21 @@
           "ordinal": 4,
           "name": "slack_team_id",
           "type_info": "Text"
+        },
+        {
+          "ordinal": 5,
+          "name": "name",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 6,
+          "name": "email",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 7,
+          "name": "tz",
+          "type_info": "Text"
         }
       ],
       "parameters": {
@@ -59,7 +74,10 @@
         false,
         false,
         false,
-        false
+        false,
+        true,
+        true,
+        true
       ]
     }
   },
@@ -105,6 +123,21 @@
           "ordinal": 4,
           "name": "slack_team_id",
           "type_info": "Text"
+        },
+        {
+          "ordinal": 5,
+          "name": "name",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 6,
+          "name": "email",
+          "type_info": "Text"
+        },
+        {
+          "ordinal": 7,
+          "name": "tz",
+          "type_info": "Text"
         }
       ],
       "parameters": {
@@ -117,7 +150,10 @@
         false,
         false,
         false,
-        false
+        false,
+        true,
+        true,
+        true
       ]
     }
   },
