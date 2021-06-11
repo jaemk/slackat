@@ -1,11 +1,12 @@
 use cached::Cached;
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{Duration, Utc};
 use regex::Regex;
 use sqlx::PgPool;
 
 use crate::crypto::Enc;
 use crate::slack::get_user_access_token;
 use crate::{crypto, models, resp, se, slack, Result, CONFIG, LOG};
+use chrono_english::{parse_date_string, Dialect};
 
 macro_rules! user_or_redirect {
     ($req:expr) => {{
@@ -129,13 +130,13 @@ fn _parse_command(cmd: &SlackCommand) -> Result<ParsedCommand> {
                     .ok_or_else(|| se!("error adding duration"))?
             }
             None => {
-                let dur_from_epoch = humantime::parse_rfc3339_weak(time.trim())
+                // todo: this should be using the user's timezone as the anchor instead of EDT
+                let edt = chrono::FixedOffset::west(4 * 60 * 60);
+                let now_edt = Utc::now().with_timezone(&edt);
+                let date_time = parse_date_string(time.trim(), now_edt, Dialect::Uk)
                     .map_err(|e| se!("error parsing datetime: {}, {}", time, e))?
-                    .duration_since(std::time::SystemTime::UNIX_EPOCH)?;
-                chrono::Utc.from_utc_datetime(&chrono::NaiveDateTime::from_timestamp(
-                    dur_from_epoch.as_secs() as i64,
-                    dur_from_epoch.subsec_nanos(),
-                ))
+                    .with_timezone(&edt);
+                date_time.with_timezone(&Utc)
             }
         };
         return Ok(ParsedCommand::Schedule(ScheduleArgs {
@@ -227,24 +228,33 @@ async fn _handle_command(ctx: &Context, cmd: &SlackCommand) -> Result<()> {
 }
 async fn handle_command(ctx: Context, cmd: SlackCommand) {
     let start = std::time::Instant::now();
-    match _handle_command(&ctx, &cmd).await {
-        Err(e) => slog::error!(
-            LOG,
-            "error handling command \"{}\" for user {} {} [{}ms]: {:?}",
-            cmd.text,
-            cmd.user_id,
-            cmd.user_name,
-            start.elapsed().as_millis(),
-            e
-        ),
-        Ok(_) => slog::info!(
-            LOG,
-            "handled command \"{}\" for user {} {} [{}ms]",
-            cmd.text,
-            cmd.user_id,
-            cmd.user_name,
-            start.elapsed().as_millis(),
-        ),
+    let err_message = match _handle_command(&ctx, &cmd).await {
+        Err(e) => {
+            slog::error!(
+                LOG,
+                "error handling command \"{}\" for user {} {} [{}ms]: {:?}",
+                cmd.text,
+                cmd.user_id,
+                cmd.user_name,
+                start.elapsed().as_millis(),
+                e
+            );
+            Some(format!("Error parsing command: {}", e))
+        }
+        Ok(_) => {
+            slog::info!(
+                LOG,
+                "handled command \"{}\" for user {} {} [{}ms]",
+                cmd.text,
+                cmd.user_id,
+                cmd.user_name,
+                start.elapsed().as_millis(),
+            );
+            None
+        }
+    };
+    if let Some(msg) = err_message {
+        slack::respond(&cmd.response_url, &msg).await.ok();
     }
 }
 
@@ -392,9 +402,12 @@ async fn auth_callback(req: tide::Request<Context>) -> tide::Result {
         .map_err(|e| se!("slack access error {}", e))?;
 
     // TODO: get user-name, email, and user timezone
-    // let name_email = slack::get_new_user_name_email(&slack_access)
-    //     .await
-    //     .map_err(|e| se!("error getting name {}", e))?;
+    // let user_info = slack::user_info(
+    //     &slack_access.authed_user.access_token,
+    //     &slack_access.authed_user.id,
+    // )
+    // .await
+    // .map_err(|e| se!("error getting user info {}", e))?;
 
     let new_auth_token = make_new_auth_token().map_err(|e| se!("new auth tokens error {}", e))?;
     let user = upsert_user_and_slack_tokens(&ctx.pool, &slack_access, &new_auth_token)

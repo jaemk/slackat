@@ -5,6 +5,9 @@ pub struct User {
     pub modified: chrono::DateTime<chrono::Utc>,
     pub slack_id: String,
     pub slack_team_id: String,
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub tz: Option<String>,
 }
 
 #[derive(sqlx::FromRow, Debug, serde::Serialize)]

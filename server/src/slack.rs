@@ -131,10 +131,19 @@ pub async fn respond(response_url: &str, message: &str) -> Result<()> {
 }
 
 #[derive(serde::Deserialize)]
+pub struct SlackUserProfile {
+    #[allow(dead_code)]
+    real_name: String,
+    #[allow(dead_code)]
+    email: String,
+}
+
+#[derive(serde::Deserialize)]
 pub struct SlackUser {
     pub id: String,
-    pub name: String,
-    pub real_name: String,
+    pub team_id: String,
+    pub tz: String,
+    pub profile: SlackUserProfile,
 }
 
 #[derive(serde::Deserialize)]
@@ -149,22 +158,42 @@ struct SlackUserInfoParams {
 
 /// https://api.slack.com/methods/users.info
 #[allow(dead_code)]
-pub async fn user_info(user_token: &str, user_slack_id: &str) -> crate::Result<SlackUserInfo> {
+pub async fn user_info(user_token: &str, user_slack_id: &str) -> Result<SlackUserInfo> {
     let mut resp = surf::get("https://slack.com/api/users.info")
         .header("authorization", format!("Bearer {}", user_token))
         .body(
             surf::Body::from_form(&SlackUserInfoParams {
                 user: user_slack_id.to_string(),
             })
-            .map_err(|e| se!("get user form error {}", e))?,
+            .map_err(|e| SlackError::Serialize(format!("get user info serialize error {:?}", e)))?,
         )
         .send()
         .await
-        .map_err(|e| se!("get user error {}", e))?;
-    Ok(resp
+        .map_err(|e| SlackError::Network(format!("get user info error {:?}", e)))?;
+    let resp: serde_json::Value = resp
         .body_json()
         .await
-        .map_err(|e| se!("json error {}", e))?)
+        .map_err(|e| SlackError::Parse(format!("user info parse error {:?}", e)))?;
+
+    if resp["error"] != serde_json::json!(null) {
+        slog::error!(crate::LOG, "error getting user info {:?}", resp);
+        Err(SlackError::Api(
+            resp["error"]
+                .as_str()
+                .map(String::from)
+                .unwrap_or_else(|| "unknown".to_string()),
+        ))
+    } else {
+        let user_info: SlackUserInfo = serde_json::from_value(resp.clone()).map_err(|e| {
+            SlackError::Parse(format!(
+                "json parse from value error {:?}\n{}",
+                e,
+                serde_json::to_string_pretty(&resp)
+                    .expect("error serializing thing I just serialized")
+            ))
+        })?;
+        Ok(user_info)
+    }
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
