@@ -29,13 +29,13 @@ RUN rm ./target/release/deps/server*
 ENV SQLX_OFFLINE=true
 RUN cargo build --release
 
+WORKDIR /app
+
 # copy over git dir and embed latest commit hash
 COPY ./.git ./.git
 # make sure there's no trailing newline
 RUN git rev-parse HEAD | awk '{ printf "%s", $0 >"commit_hash.txt" }'
 RUN rm -rf ./.git
-
-WORKDIR /app
 
 COPY ./bin ./bin
 COPY ./server/Migrant.toml ./server/Migrant.toml
