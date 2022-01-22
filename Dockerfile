@@ -49,6 +49,5 @@ WORKDIR /app
 RUN apt-get update && apt-get install --yes ca-certificates
 COPY --from=builder /app/server ./server
 COPY --from=builder /usr/local/cargo/bin/migrant /usr/bin/migrant
-WORKDIR /app/server
 
 CMD ["./bin/start.sh"]
