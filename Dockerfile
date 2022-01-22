@@ -1,10 +1,9 @@
-FROM rust:1.53
-
-RUN cargo install migrant --features postgres
+FROM rust:1.58.1-bullseye as builder
 
 # create a new empty shell
 RUN mkdir -p /app
 WORKDIR /app
+RUN cargo install migrant --features postgres
 
 RUN USER=root cargo new --bin server
 
@@ -44,5 +43,12 @@ COPY ./server/migrations ./server/migrations
 # copy out the binary and delete the build artifacts
 RUN cp ./server/target/release/server ./bin/server
 RUN rm -rf ./server/target
+
+FROM debian:bullseye-slim
+WORKDIR /app
+RUN apt-get update && apt-get install --yes ca-certificates
+COPY --from=builder /app/server ./server
+COPY --from=builder /usr/local/cargo/bin/migrant /usr/bin/migrant
+WORKDIR /app/server
 
 CMD ["./bin/start.sh"]
