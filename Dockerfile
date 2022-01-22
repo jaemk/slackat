@@ -46,7 +46,7 @@ RUN rm -rf ./server/target
 
 FROM debian:bullseye-slim
 WORKDIR /app
-RUN apt-get update && apt-get install --yes ca-certificates curl libcurl-dev
+RUN apt-get update && apt-get install --yes ca-certificates curl
 COPY --from=builder /app/server ./server
 COPY --from=builder /app/bin ./bin
 COPY --from=builder /app/commit_hash.txt ./commit_hash.txt
